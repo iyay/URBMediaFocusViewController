@@ -317,24 +317,26 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 - (void)showImageFromURL:(NSURL *)url fromRect:(CGRect)fromRect {
 	self.fromRect = fromRect;
 	
-	NSURLRequest *request = [NSURLRequest requestWithURL:url];
+	NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url cachePolicy:NSURLRequestReturnCacheDataElseLoad timeoutInterval:30.0];
+  [request addValue:@"image/*" forHTTPHeaderField:@"Accept"];
 	NSURLConnection *connection = [[NSURLConnection alloc] initWithRequest:request delegate:self];
+    
 	self.urlConnection = connection;
 	
 	// stores data as it's loaded from the request
 	self.urlData = [[NSMutableData alloc] init];
 	
+  [self.loadingView stopAnimating];
+  [self.loadingView removeFromSuperview];
+
 	// show loading indicator on fromView
-	if (!self.loadingView) {
-		self.loadingView = [[UIActivityIndicatorView alloc] initWithFrame:CGRectMake(0, 0, 30.0, 30.0)];
-	}
-	if (self.fromView) {
-		[self.fromView addSubview:self.loadingView];
-		self.loadingView.center = CGPointMake(CGRectGetWidth(self.fromView.frame) / 2.0, CGRectGetHeight(self.fromView.frame) / 2.0);
-	}
+  self.loadingView = [[UIActivityIndicatorView alloc] initWithFrame:CGRectMake(0, 0, 30.0, 30.0)];
+	[fromView addSubview:self.loadingView];
+	self.loadingView.center = CGPointMake(CGRectGetWidth(fromView.frame) / 2.0, CGRectGetHeight(fromView.frame) / 2.0);
 	
 	[self.loadingView startAnimating];
 	[self.urlConnection start];
+
 }
 
 - (void)dismiss:(BOOL)animated {
@@ -707,6 +709,8 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 	if ([self.delegate respondsToSelector:@selector(mediaFocusViewController:didFailLoadingImageWithError:)]) {
 		[self.delegate mediaFocusViewController:self didFailLoadingImageWithError:error];
 	}
+	[self.loadingView stopAnimating];
+	[self.loadingView removeFromSuperview];
 }
 
 #pragma mark - Orientation Helpers
