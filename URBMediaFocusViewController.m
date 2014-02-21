@@ -331,8 +331,8 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 
 	// show loading indicator on fromView
   self.loadingView = [[UIActivityIndicatorView alloc] initWithFrame:CGRectMake(0, 0, 30.0, 30.0)];
-	[fromView addSubview:self.loadingView];
-	self.loadingView.center = CGPointMake(CGRectGetWidth(fromView.frame) / 2.0, CGRectGetHeight(fromView.frame) / 2.0);
+	[self.fromView addSubview:self.loadingView];
+	self.loadingView.center = CGPointMake(CGRectGetWidth(self.fromView.frame) / 2.0, CGRectGetHeight(self.fromView.frame) / 2.0);
 	
 	[self.loadingView startAnimating];
 	[self.urlConnection start];
