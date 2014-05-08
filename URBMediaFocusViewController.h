@@ -50,13 +50,22 @@
 @property (nonatomic, assign) BOOL shouldBlurBackground;
 @property (nonatomic, assign) BOOL parallaxEnabled;
 
-// determines whether or not view should be dismissed when the container view is tapped anywhere, including outside image bounds
+// determines whether or not view should be dismissed when the container view is tapped anywhere outside image bounds
 @property (nonatomic, assign) BOOL shouldDismissOnTap;
 
 // determines whether or not view should be dismissed when the container view is tapped within bounds of image view
 @property (nonatomic, assign) BOOL shouldDismissOnImageTap;
 
+// determines if photo action sheet should appear with a long press on the photo (default NO)
+@property (nonatomic, assign) BOOL shouldShowPhotoActions;
+
+//determines if view should rotate when the device orientation changes (default YES)
+@property (nonatomic, assign) BOOL shouldRotateToDeviceOrientation;
+
 @property (nonatomic, weak) id<URBMediaFocusViewControllerDelegate> delegate;
+
+// HTTP header values included in URL requests
+@property (nonatomic, strong) NSDictionary *requestHTTPHeaders;
 
 /**
  *  Convenience method for not using a parentViewController.
@@ -79,7 +88,7 @@
 - (void)showImageFromURL:(NSURL *)url fromView:(UIView *)fromView;
 
 /**
- *  Presents media from a specific CGRect after being requested from the specified URL. The `URBMediaFocusViewController` will 
+ *  Presents media from a specific CGRect after being requested from the specified URL. The `URBMediaFocusViewController` will
  *	only present its view once the image has been successfully loaded.
  *
  *  @param url      The remote url of the full size image that will be requested and displayed.
@@ -88,7 +97,7 @@
 - (void)showImageFromURL:(NSURL *)url fromRect:(CGRect)fromRect;
 
 /**
- *  Shows a full size image over the current view or main window. The image should be cached locally on the device, in the app 
+ *  Shows a full size image over the current view or main window. The image should be cached locally on the device, in the app
  *	bundle or an image generated from `NSData`.
  *
  *  @param image                The full size image to show, which should be an image already cached on the device or within the app's bundle.
@@ -98,7 +107,7 @@
 - (void)showImage:(UIImage *)image fromView:(UIView *)fromView inViewController:(UIViewController *)parentViewController;
 
 /**
- *  Shows a full size image over the current view or main window after being requested from the specified URL. The `URBMediaFocusViewController` 
+ *  Shows a full size image over the current view or main window after being requested from the specified URL. The `URBMediaFocusViewController`
  *	will only present its view once the image has been successfully loaded.
  *
  *  @param url                  The remote url of the full size image that will be requested and displayed.
@@ -112,4 +121,9 @@
  */
 - (void)cancelURLConnectionIfAny;
 
+@end
+
+@interface UIImage (URBAnimatedGIF)
++ (UIImage *)urb_animatedImageWithAnimatedGIFData:(NSData *)data;
++ (UIImage *)urb_animatedImageWithAnimatedGIFURL:(NSURL *)url;
 @end

@@ -7,9 +7,12 @@
 //
 
 #import <Accelerate/Accelerate.h>
+#import <QuartzCore/QuartzCore.h>
+#import <AssetsLibrary/AssetsLibrary.h>
+
 #import "URBMediaFocusViewController.h"
 
-static const CGFloat __overlayAlpha = 0.7f;						// opacity of the black overlay displayed below the focused image
+static const CGFloat __overlayAlpha = 0.6f;						// opacity of the black overlay displayed below the focused image
 static const CGFloat __animationDuration = 0.18f;				// the base duration for present/dismiss animations (except physics-related ones)
 static const CGFloat __maximumDismissDelay = 0.5f;				// maximum time of delay (in seconds) between when image view is push out and dismissal animations begin
 static const CGFloat __resistance = 0.0f;						// linear resistance applied to the image’s dynamic item behavior
@@ -25,17 +28,17 @@ static const CGFloat __blurSaturationDeltaMask = 0.8f;
 static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint the background view
 
 @interface UIView (URBMediaFocusViewController)
-- (UIImage *)snapshotImageWithScale:(CGFloat)scale;
+- (UIImage *)urb_snapshotImageWithScale:(CGFloat)scale;
 @end
 
 /**
  Pulled from Apple's UIImage+ImageEffects category, but renamed to avoid potential selector name conflicts.
  */
 @interface UIImage (URBImageEffects)
-- (UIImage *)URB_applyBlurWithRadius:(CGFloat)blurRadius tintColor:(UIColor *)tintColor saturationDeltaFactor:(CGFloat)saturationDeltaFactor maskImage:(UIImage *)maskImage;
+- (UIImage *)urb_applyBlurWithRadius:(CGFloat)blurRadius tintColor:(UIColor *)tintColor saturationDeltaFactor:(CGFloat)saturationDeltaFactor maskImage:(UIImage *)maskImage;
 @end
 
-@interface URBMediaFocusViewController () <UIScrollViewDelegate>
+@interface URBMediaFocusViewController () <UIScrollViewDelegate, UIActionSheetDelegate>
 
 @property (nonatomic, strong) UIView *fromView;
 @property (nonatomic, assign) CGRect fromRect;
@@ -55,6 +58,7 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 @property (nonatomic, strong) UITapGestureRecognizer *doubleTapRecognizer;
 @property (nonatomic, strong) UITapGestureRecognizer *tapRecognizer;
 @property (nonatomic, strong) UITapGestureRecognizer *photoTapRecognizer;
+@property (nonatomic, strong) UILongPressGestureRecognizer *photoLongPressRecognizer;
 
 @property (nonatomic, strong) UIActivityIndicatorView *loadingView;
 @property (nonatomic, strong) NSURLConnection *urlConnection;
@@ -86,6 +90,8 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 		self.parallaxEnabled = YES;
 		self.shouldDismissOnTap = YES;
 		self.shouldDismissOnImageTap = YES;
+		self.shouldShowPhotoActions = NO;
+		self.shouldRotateToDeviceOrientation = YES;
 	}
 	return self;
 }
@@ -100,7 +106,7 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 	self.view.frame = self.keyWindow.bounds;
 	
 	self.backgroundView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, CGRectGetWidth(self.keyWindow.frame), CGRectGetHeight(self.keyWindow.frame))];
-	self.backgroundView.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.6f];
+	self.backgroundView.backgroundColor = [UIColor colorWithWhite:0.0f alpha:__overlayAlpha];
 	self.backgroundView.alpha = 0.0f;
 	self.backgroundView.autoresizingMask = UIViewAutoresizingFlexibleHeight|UIViewAutoresizingFlexibleWidth;
 	[self.view addSubview:self.backgroundView];
@@ -117,6 +123,11 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 	self.imageView.contentMode = UIViewContentModeScaleAspectFit;
 	self.imageView.alpha = 0.0f;
 	self.imageView.userInteractionEnabled = YES;
+	// Enable edge antialiasing on 7.0 or later.
+	// This symbol appears pre-7.0 but is not considered public API until 7.0
+	if (([[[UIDevice currentDevice] systemVersion] compare:@"7.0" options:NSNumericSearch] != NSOrderedAscending)) {
+		self.imageView.layer.allowsEdgeAntialiasing = YES;
+	}
 	[self.scrollView addSubview:self.imageView];
 	
 	/* setup gesture recognizers */
@@ -134,6 +145,13 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 	self.tapRecognizer.numberOfTouchesRequired = 1;
 	[self.tapRecognizer requireGestureRecognizerToFail:self.doubleTapRecognizer];
 	[self.view addGestureRecognizer:self.tapRecognizer];
+	
+	// long press gesture recognizer to bring up photo actions (when `shouldShowPhotoActions` is set to YES)
+	if (self.shouldShowPhotoActions) {
+		self.photoLongPressRecognizer = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPressGesture:)];
+		self.photoLongPressRecognizer.delegate = self;
+		[self.imageView addGestureRecognizer:self.photoLongPressRecognizer];
+	}
 	
 	// only add pan gesture and physics stuff if we can (e.g., iOS 7+)
 	if (NSClassFromString(@"UIDynamicAnimator")) {
@@ -188,15 +206,19 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 
 - (void)showImage:(UIImage *)image fromView:(UIView *)fromView inViewController:(UIViewController *)parentViewController {
 	self.fromView = fromView;
-	self.targetViewController = parentViewController;
+	//self.targetViewController = parentViewController;
+	UIView *superview = (parentViewController) ? parentViewController.view : fromView.superview;
+	CGRect fromRect = [superview convertRect:fromView.frame toView:nil];
 	
-	CGRect fromRect = [self.view convertRect:fromView.frame fromView:nil];
 	[self showImage:image fromRect:fromRect];
 }
 
 - (void)showImage:(UIImage *)image fromRect:(CGRect)fromRect {
+	NSAssert(image, @"Image is required");
+    
 	[self view]; // make sure view has loaded first
 	_currentOrientation = [UIApplication sharedApplication].statusBarOrientation;
+	//fromRect = CGRectApplyAffineTransform(fromRect, [self transformForOrientation:_currentOrientation]);
 	self.fromRect = fromRect;
 	
 	self.imageView.transform = CGAffineTransformIdentity;
@@ -204,13 +226,17 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 	self.imageView.alpha = 0.2;
 	
 	// create snapshot of background if parallax is enabled
-	if (self.parallaxEnabled) {
-		[self createViewsForParallax];
+	if (self.parallaxEnabled || self.shouldBlurBackground) {
+		[self createViewsForBackground];
 		
 		// hide status bar, but store whether or not we need to unhide it later when dismissing this view
 		// NOTE: in iOS 7+, this only works if you set `UIViewControllerBasedStatusBarAppearance` to YES in your Info.plist
 		_unhideStatusBarOnDismiss = ![UIApplication sharedApplication].statusBarHidden;
 		[[UIApplication sharedApplication] setStatusBarHidden:YES withAnimation:UIStatusBarAnimationNone];
+		
+		if ([self respondsToSelector:@selector(setNeedsStatusBarAppearanceUpdate)]) {
+			[self setNeedsStatusBarAppearanceUpdate];
+		}
 	}
 	
 	// update scrollView.contentSize to the size of the image
@@ -223,12 +249,11 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 	CGPoint midpoint = CGPointMake(CGRectGetMidX(self.view.bounds), CGRectGetMidY(self.view.bounds));
 	CGSize scaledImageSize = CGSizeMake(image.size.width * scale, image.size.height * scale);
 	CGRect targetRect = CGRectMake(midpoint.x - scaledImageSize.width / 2.0, midpoint.y - scaledImageSize.height / 2.0, scaledImageSize.width, scaledImageSize.height);
-	self.imageView.frame = targetRect;
 	
 	// set initial frame of image view to match that of the presenting image
-	//self.imageView.frame = CGRectMake(midpoint.x - image.size.width / 2.0, midpoint.y - image.size.height / 2.0, image.size.width, image.size.height);
 	self.imageView.frame = [self.view convertRect:fromRect fromView:nil];
 	_originalFrame = targetRect;
+	
 	// rotate imageView based on current device orientation
 	[self reposition];
     
@@ -286,8 +311,10 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 		
 		if (self.snapshotView) {
 			self.blurredSnapshotView.alpha = 1.0f;
-			self.blurredSnapshotView.transform = CGAffineTransformScale(CGAffineTransformIdentity, __backgroundScale, __backgroundScale);
-			self.snapshotView.transform = CGAffineTransformScale(CGAffineTransformIdentity, __backgroundScale, __backgroundScale);
+			if (self.parallaxEnabled) {
+				self.blurredSnapshotView.transform = CGAffineTransformScale(CGAffineTransformIdentity, __backgroundScale, __backgroundScale);
+				self.snapshotView.transform = CGAffineTransformScale(CGAffineTransformIdentity, __backgroundScale, __backgroundScale);
+			}
 		}
 		
 	} completion:^(BOOL finished) {
@@ -310,33 +337,43 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 	self.fromView = fromView;
 	self.targetViewController = parentViewController;
 	
-	CGRect fromRect = [self.view convertRect:fromView.frame fromView:nil];
+	UIView *superview = (parentViewController) ? parentViewController.view : fromView.superview;
+	CGRect fromRect = [superview convertRect:fromView.frame toView:nil];
+	
 	[self showImageFromURL:url fromRect:fromRect];
 }
 
 - (void)showImageFromURL:(NSURL *)url fromRect:(CGRect)fromRect {
 	self.fromRect = fromRect;
 	
+	// cancel any outstanding requests if we have one
+	[self cancelURLConnectionIfAny];
+	
 	NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url cachePolicy:NSURLRequestReturnCacheDataElseLoad timeoutInterval:30.0];
-  [request addValue:@"image/*" forHTTPHeaderField:@"Accept"];
+	if (self.requestHTTPHeaders.count > 0) {
+		for (NSString *key in self.requestHTTPHeaders) {
+			NSString *value = [self.requestHTTPHeaders valueForKey:key];
+			[request setValue:value forHTTPHeaderField:key];
+		}
+	}
+	
 	NSURLConnection *connection = [[NSURLConnection alloc] initWithRequest:request delegate:self];
-    
 	self.urlConnection = connection;
 	
 	// stores data as it's loaded from the request
 	self.urlData = [[NSMutableData alloc] init];
 	
-  [self.loadingView stopAnimating];
-  [self.loadingView removeFromSuperview];
-
 	// show loading indicator on fromView
-  self.loadingView = [[UIActivityIndicatorView alloc] initWithFrame:CGRectMake(0, 0, 30.0, 30.0)];
-	[self.fromView addSubview:self.loadingView];
-	self.loadingView.center = CGPointMake(CGRectGetWidth(self.fromView.frame) / 2.0, CGRectGetHeight(self.fromView.frame) / 2.0);
+	if (!self.loadingView) {
+		self.loadingView = [[UIActivityIndicatorView alloc] initWithFrame:CGRectMake(0, 0, 30.0, 30.0)];
+	}
+	if (self.fromView) {
+		[self.fromView addSubview:self.loadingView];
+		self.loadingView.center = CGPointMake(CGRectGetWidth(self.fromView.frame) / 2.0, CGRectGetHeight(self.fromView.frame) / 2.0);
+	}
 	
 	[self.loadingView startAnimating];
 	[self.urlConnection start];
-
 }
 
 - (void)dismiss:(BOOL)animated {
@@ -373,6 +410,12 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 	
 	[UIView animateWithDuration:__animationDuration delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
 		self.imageView.frame = targetFrame;
+		if (!CGRectIsEmpty(self.fromRect)) {
+			self.imageView.frame = self.fromRect;
+		}
+		else {
+			self.imageView.frame = [self.view convertRect:self.fromView.frame fromView:nil];
+		}
 		//self.imageView.alpha = 0.0f;
 		self.backgroundView.alpha = 0.0f;
 	} completion:^(BOOL finished) {
@@ -390,15 +433,22 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 	return [UIApplication sharedApplication].keyWindow;
 }
 
-- (void)createViewsForParallax {
+- (void)createViewsForBackground {
 	// container view for window
+	CGRect containerFrame = CGRectMake(0, 0, CGRectGetWidth(self.keyWindow.frame), CGRectGetHeight(self.keyWindow.frame));
+	
 	// inset container view so we can blur the edges, but we also need to scale up so when __backgroundScale is applied, everything lines up
-	CGRect containerFrame = CGRectMake(0, 0, CGRectGetWidth(self.keyWindow.frame) * (1.0f / __backgroundScale), CGRectGetHeight(self.keyWindow.frame) * (1.0f / __backgroundScale));
+	// only perform inset if `parallaxEnabled` is YES
+	if (self.parallaxEnabled) {
+		containerFrame.size.width *= 1.0f / __backgroundScale;
+		containerFrame.size.height *= 1.0f / __backgroundScale;
+	}
+	
 	UIView *containerView = [[UIView alloc] initWithFrame:CGRectIntegral(containerFrame)];
 	containerView.backgroundColor = [UIColor blackColor];
 	
 	// add snapshot of window to the container
-	UIImage *windowSnapshot = [self.keyWindow snapshotImageWithScale:[UIScreen mainScreen].scale];
+	UIImage *windowSnapshot = [self.keyWindow urb_snapshotImageWithScale:[UIScreen mainScreen].scale];
 	UIImageView *windowSnapshotView = [[UIImageView alloc] initWithImage:windowSnapshot];
 	windowSnapshotView.center = containerView.center;
 	[containerView addSubview:windowSnapshotView];
@@ -407,8 +457,8 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 	UIImageView *snapshotView;
 	// only add blurred view if radius is above 0
 	if (self.shouldBlurBackground && __blurRadius) {
-		UIImage *snapshot = [containerView snapshotImageWithScale:[UIScreen mainScreen].scale];
-		snapshot = [snapshot URB_applyBlurWithRadius:__blurRadius
+		UIImage *snapshot = [containerView urb_snapshotImageWithScale:[UIScreen mainScreen].scale];
+		snapshot = [snapshot urb_applyBlurWithRadius:__blurRadius
 										   tintColor:[UIColor colorWithWhite:0.0f alpha:__blurTintColorAlpha]
 							   saturationDeltaFactor:__blurSaturationDeltaMask
 										   maskImage:nil];
@@ -507,6 +557,7 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 }
 
 - (void)cleanup {
+	_hasLaidOut = NO;
 	[self.view removeFromSuperview];
 	
 	if (self.targetViewController) {
@@ -534,6 +585,28 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 	if ([self.delegate respondsToSelector:@selector(mediaFocusViewControllerDidDisappear:)]) {
 		[self.delegate mediaFocusViewControllerDidDisappear:self];
 	}
+	
+	if ([self respondsToSelector:@selector(setNeedsStatusBarAppearanceUpdate)]) {
+		[self setNeedsStatusBarAppearanceUpdate];
+	}
+}
+
+- (void)saveImageToLibrary:(UIImage *)image {
+	ALAssetsLibrary *library = [[ALAssetsLibrary alloc] init];
+	[library writeImageToSavedPhotosAlbum:image.CGImage orientation:(ALAssetOrientation)image.imageOrientation completionBlock:^(NSURL *assetURL, NSError *error) {
+		if (error) {
+			UIAlertView *alertView = [[UIAlertView alloc] initWithTitle:error.localizedDescription
+																message:error.localizedRecoverySuggestion
+															   delegate:nil
+													  cancelButtonTitle:NSLocalizedString(@"OK", nil)
+													  otherButtonTitles:nil];
+			[alertView show];
+		}
+	}];
+}
+
+- (void)copyImage:(UIImage *)image {
+	[UIPasteboard generalPasteboard].image = image;
 }
 
 #pragma mark - Gesture Methods
@@ -596,7 +669,7 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 			// for angular velocity: positive = clockwise, negative = counterclockwise
 			CGFloat xRatioFromCenter = fabsf(offsetFromCenter.horizontal) / (CGRectGetWidth(self.imageView.frame) / 2.0f);
 			CGFloat yRatioFromCetner = fabsf(offsetFromCenter.vertical) / (CGRectGetHeight(self.imageView.frame) / 2.0f);
-
+            
 			// apply device scale to angular velocity
 			angularVelocity *= deviceAngularScale;
 			// adjust angular velocity based on distance from center, force applied farther towards the edges gets more spin
@@ -624,7 +697,7 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 	else {
 		CGPoint tapPoint = [self.imageView convertPoint:[gestureRecognizer locationInView:gestureRecognizer.view] fromView:self.scrollView];
 		CGFloat newZoomScale = self.scrollView.maximumZoomScale;
-				
+        
 		CGFloat w = CGRectGetWidth(self.imageView.frame) / newZoomScale;
 		CGFloat h = CGRectGetHeight(self.imageView.frame) / newZoomScale;
 		CGRect zoomRect = CGRectMake(tapPoint.x - (w / 2.0f), tapPoint.y - (h / 2.0f), w, h);
@@ -641,12 +714,25 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 	if (self.shouldDismissOnTap) {
 		if (self.shouldDismissOnImageTap || !CGRectContainsPoint(self.imageView.frame, location)) {
 			[self dismissToTargetView];
+            return;
 		}
 	}
 	
 	if (self.shouldDismissOnImageTap && CGRectContainsPoint(self.imageView.frame, location)) {
 		// we aren't allowing taps outside of image bounds to dismiss, but tap was detected on image view, we can dismiss
 		[self dismissToTargetView];
+        return;
+	}
+}
+
+- (void)handleLongPressGesture:(UILongPressGestureRecognizer *)gestureRecognizer {
+	if (gestureRecognizer.state == UIGestureRecognizerStateBegan) {
+		UIActionSheet *actionSheet = [[UIActionSheet alloc] initWithTitle:nil
+																 delegate:self
+														cancelButtonTitle:NSLocalizedString(@"Cancel", nil)
+												   destructiveButtonTitle:nil
+														otherButtonTitles:NSLocalizedString(@"Save Photo", nil), NSLocalizedString(@"Copy Photo", nil), nil];
+		[actionSheet showInView:self.view];
 	}
 }
 
@@ -673,6 +759,17 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 	[self centerScrollViewContents];
 }
 
+#pragma mark - UIActionSheetDelegate
+
+- (void)actionSheet:(UIActionSheet *)actionSheet clickedButtonAtIndex:(NSInteger)buttonIndex {
+	if (buttonIndex == 0) {
+		[self saveImageToLibrary:self.imageView.image];
+	}
+	else if (buttonIndex == 1) {
+		[self copyImage:self.imageView.image];
+	}
+}
+
 #pragma mark - UIGestureRecognizerDelegate Methods
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
@@ -680,7 +777,7 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 	BOOL shouldRecognize = transformScale > _minScale;
 	
 	// make sure tap and double tap gestures aren't recognized simultaneously
-	shouldRecognize = !([gestureRecognizer isKindOfClass:[UITapGestureRecognizer class]] && [otherGestureRecognizer isKindOfClass:[UITapGestureRecognizer class]]);
+	shouldRecognize = shouldRecognize && !([gestureRecognizer isKindOfClass:[UITapGestureRecognizer class]] && [otherGestureRecognizer isKindOfClass:[UITapGestureRecognizer class]]);
 	
 	return shouldRecognize;
 }
@@ -696,7 +793,17 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 	[self.loadingView removeFromSuperview];
 	
 	if (self.urlData) {
-		UIImage *image = [UIImage imageWithData:self.urlData];
+		NSString *urlPath = connection.currentRequest.URL.absoluteString;
+		UIImage *image;
+		
+		// determine if the loaded url is an animated GIF, and setup accordingly if so
+		if ([[urlPath substringFromIndex:[urlPath length] - 3] isEqualToString:@"gif"]) {
+			self.imageView.image = [UIImage imageWithData:self.urlData];
+			image = [UIImage urb_animatedImageWithAnimatedGIFData:self.urlData];
+		}
+		else {
+			image = [UIImage imageWithData:self.urlData];
+		}
 		[self showImage:image fromRect:self.fromRect];
 		
 		if ([self.delegate respondsToSelector:@selector(mediaFocusViewController:didFinishLoadingImage:)]) {
@@ -709,18 +816,17 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 	if ([self.delegate respondsToSelector:@selector(mediaFocusViewController:didFailLoadingImageWithError:)]) {
 		[self.delegate mediaFocusViewController:self didFailLoadingImageWithError:error];
 	}
-	[self.loadingView stopAnimating];
-	[self.loadingView removeFromSuperview];
 }
 
 #pragma mark - Orientation Helpers
 
 - (void)deviceOrientationChanged:(NSNotification *)notification {
-	NSLog(@"device orientation changed");
-	UIInterfaceOrientation orientation = [UIApplication sharedApplication].statusBarOrientation;
-	if (_currentOrientation != orientation) {
-		_currentOrientation = orientation;
-		[self reposition];
+	UIInterfaceOrientation deviceOrientation = (UIInterfaceOrientation)[UIDevice currentDevice].orientation;
+	if (_currentOrientation != deviceOrientation) {
+		_currentOrientation = deviceOrientation;
+		if (self.shouldRotateToDeviceOrientation) {
+			[self reposition];
+		}
 	}
 }
 
@@ -751,7 +857,7 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 	CGFloat n1 = sqrtf(t1.a * t1.a + t1.c * t1.c);
 	CGFloat n2 = sqrtf(t2.a * t2.a + t2.c * t2.c);
 	CGFloat rotationDelta = acosf(dot / (n1 * n2));
-	BOOL isDoubleRotation = (rotationDelta > M_PI_2);
+	BOOL isDoubleRotation = (rotationDelta > 1.581);
 	
 	// use the system rotation duration
 	CGFloat duration = [UIApplication sharedApplication].statusBarOrientationAnimationDuration;
@@ -764,11 +870,11 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 	// if we haven't laid out the subviews yet, we don't want to animate rotation and position transforms
 	if (_hasLaidOut) {
 		[UIView animateWithDuration:duration animations:^{
-			self.imageView.transform = CGAffineTransformConcat(self.imageView.transform, baseTransform);
+			self.imageView.transform = CGAffineTransformConcat(CGAffineTransformIdentity, baseTransform);
 		}];
 	}
 	else {
-		self.imageView.transform = CGAffineTransformConcat(self.imageView.transform, baseTransform);
+		self.imageView.transform = CGAffineTransformConcat(CGAffineTransformIdentity, baseTransform);
 	}
 }
 
@@ -777,7 +883,7 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
 
 @implementation UIView (URBMediaFocusViewController)
 
-- (UIImage *)snapshotImageWithScale:(CGFloat)scale {
+- (UIImage *)urb_snapshotImageWithScale:(CGFloat)scale {
 	UIGraphicsBeginImageContextWithOptions(self.bounds.size, NO, scale);
 	if ([self respondsToSelector:@selector(drawViewHierarchyInRect:afterScreenUpdates:)]) {
 		[self drawViewHierarchyInRect:self.bounds afterScreenUpdates:YES];
@@ -887,7 +993,7 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
  */
 @implementation UIImage (URBImageEffects)
 
-- (UIImage *)URB_applyBlurWithRadius:(CGFloat)blurRadius tintColor:(UIColor *)tintColor saturationDeltaFactor:(CGFloat)saturationDeltaFactor maskImage:(UIImage *)maskImage {
+- (UIImage *)urb_applyBlurWithRadius:(CGFloat)blurRadius tintColor:(UIColor *)tintColor saturationDeltaFactor:(CGFloat)saturationDeltaFactor maskImage:(UIImage *)maskImage {
 	// Check pre-conditions.
     if (self.size.width < 1 || self.size.height < 1) {
         NSLog (@"*** error: invalid size: (%.2f x %.2f). Both dimensions must be >= 1: %@", self.size.width, self.size.height, self);
@@ -1014,6 +1120,138 @@ static const CGFloat __blurTintColorAlpha = 0.2f;				// defines how much to tint
     UIGraphicsEndImageContext();
 	
     return outputImage;
+}
+
+@end
+
+
+@import ImageIO;
+
+#if __has_feature(objc_arc)
+#define toCF (__bridge CFTypeRef)
+#define fromCF (__bridge id)
+#else
+#define toCF (CFTypeRef)
+#define fromCF (id)
+#endif
+
+/**
+ *  Animated GIF category and utility methods from https://github.com/mayoff/uiimage-from-animated-gif
+ */
+@implementation UIImage (URBAnimatedGIF)
+
+static int delayCentisecondsForImageAtIndex(CGImageSourceRef const source, size_t const i) {
+    int delayCentiseconds = 1;
+    CFDictionaryRef const properties = CGImageSourceCopyPropertiesAtIndex(source, i, NULL);
+    if (properties) {
+        CFDictionaryRef const gifProperties = CFDictionaryGetValue(properties, kCGImagePropertyGIFDictionary);
+        if (gifProperties) {
+            NSNumber *number = fromCF CFDictionaryGetValue(gifProperties, kCGImagePropertyGIFUnclampedDelayTime);
+            if (number == NULL || [number doubleValue] == 0) {
+                number = fromCF CFDictionaryGetValue(gifProperties, kCGImagePropertyGIFDelayTime);
+            }
+            if ([number doubleValue] > 0) {
+                // Even though the GIF stores the delay as an integer number of centiseconds, ImageIO “helpfully” converts that to seconds for us.
+                delayCentiseconds = (int)lrint([number doubleValue] * 100);
+            }
+        }
+        CFRelease(properties);
+    }
+    return delayCentiseconds;
+}
+
+static void createImagesAndDelays(CGImageSourceRef source, size_t count, CGImageRef imagesOut[count], int delayCentisecondsOut[count]) {
+    for (size_t i = 0; i < count; ++i) {
+        imagesOut[i] = CGImageSourceCreateImageAtIndex(source, i, NULL);
+        delayCentisecondsOut[i] = delayCentisecondsForImageAtIndex(source, i);
+    }
+}
+
+static int sum(size_t const count, int const *const values) {
+    int theSum = 0;
+    for (size_t i = 0; i < count; ++i) {
+		theSum += values[i];
+    }
+	
+    return theSum;
+}
+
+static int pairGCD(int a, int b) {
+    if (a < b) {
+		return pairGCD(b, a);
+	}
+	
+    while (true) {
+		int const r = a % b;
+		if (r == 0) {
+			return b;
+		}
+		
+		a = b;
+		b = r;
+    }
+}
+
+static int vectorGCD(size_t const count, int const *const values) {
+    int gcd = values[0];
+    for (size_t i = 1; i < count; ++i) {
+		// Note that after I process the first few elements of the vector, `gcd` will probably be smaller than any remaining element.  By passing the smaller value as the second argument to `pairGCD`, I avoid making it swap the arguments.
+		gcd = pairGCD(values[i], gcd);
+    }
+	
+    return gcd;
+}
+
+static NSArray *frameArray(size_t const count, CGImageRef const images[count], int const delayCentiseconds[count], int const totalDurationCentiseconds) {
+	int const gcd = vectorGCD(count, delayCentiseconds);
+	size_t const frameCount = totalDurationCentiseconds / gcd;
+	UIImage *frames[frameCount];
+	for (size_t i = 0, f = 0; i < count; ++i) {
+		UIImage *const frame = [UIImage imageWithCGImage:images[i]];
+		for (size_t j = delayCentiseconds[i] / gcd; j > 0; --j) {
+			frames[f++] = frame;
+		}
+	}
+	
+	return [NSArray arrayWithObjects:frames count:frameCount];
+}
+
+static void releaseImages(size_t const count, CGImageRef const images[count]) {
+	for (size_t i = 0; i < count; ++i) {
+		CGImageRelease(images[i]);
+    }
+}
+
+static UIImage *animatedImageWithAnimatedGIFImageSource(CGImageSourceRef const source) {
+	size_t const count = CGImageSourceGetCount(source);
+	CGImageRef images[count];
+	int delayCentiseconds[count]; // in centiseconds
+	createImagesAndDelays(source, count, images, delayCentiseconds);
+	int const totalDurationCentiseconds = sum(count, delayCentiseconds);
+	NSArray *const frames = frameArray(count, images, delayCentiseconds, totalDurationCentiseconds);
+	UIImage *const animation = [UIImage animatedImageWithImages:frames duration:(NSTimeInterval)totalDurationCentiseconds / 100.0];
+	releaseImages(count, images);
+	
+	return animation;
+}
+
+static UIImage *animatedImageWithAnimatedGIFReleasingImageSource(CGImageSourceRef source) {
+	if (source) {
+		UIImage *const image = animatedImageWithAnimatedGIFImageSource(source);
+		CFRelease(source);
+		return image;
+	}
+	else {
+		return nil;
+	}
+}
+
++ (UIImage *)urb_animatedImageWithAnimatedGIFData:(NSData *)data {
+	return animatedImageWithAnimatedGIFReleasingImageSource(CGImageSourceCreateWithData(toCF data, NULL));
+}
+
++ (UIImage *)urb_animatedImageWithAnimatedGIFURL:(NSURL *)url {
+	return animatedImageWithAnimatedGIFReleasingImageSource(CGImageSourceCreateWithURL(toCF url, NULL));
 }
 
 @end
